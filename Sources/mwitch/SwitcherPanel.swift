@@ -1,11 +1,33 @@
 import Cocoa
 import SwiftUI
 
-/// Centered floating panel with the row layout:
+/// Where the switcher sits on a screen: horizontally centered, vertically
+/// biased into the top half (Spotlight-style) rather than dead center.
+enum SwitcherPanelLayout {
+    /// The panel's vertical center sits at this fraction of the visible frame
+    /// height, measured from the bottom. 0.5 would be dead center.
+    static let verticalCenterBias: CGFloat = 0.62
+    /// Tall lists are clamped so they never come closer than this to an edge.
+    static let edgeMargin: CGFloat = 24
+
+    static func origin(panelSize: NSSize, visibleFrame: NSRect) -> NSPoint {
+        let x = visibleFrame.midX - panelSize.width / 2
+        let idealY = visibleFrame.minY + visibleFrame.height * verticalCenterBias - panelSize.height / 2
+        let topMost = visibleFrame.maxY - edgeMargin - panelSize.height
+        let y = max(visibleFrame.minY + edgeMargin, min(idealY, topMost))
+        return NSPoint(x: x, y: y)
+    }
+}
+
+/// Floating panel with the row layout:
 ///     [hint] [app name, right-aligned] [icon] [window title, left-aligned]
 /// Typing filters by app + title; release Cmd commits.
 final class SwitcherPanel: NSPanel {
     private weak var panelDelegate: SwitcherPanelDelegate?
+
+    /// The screen this panel is pinned to while presented. The controller shows
+    /// one panel per display; nil falls back to the screen under the mouse.
+    private var assignedScreen: NSScreen?
 
     private var hostingView: NSHostingView<SwitcherPanelView>?
     private var snapshot = SwitcherPanelSnapshot.empty
@@ -66,24 +88,33 @@ final class SwitcherPanel: NSPanel {
         sizeToContents()
         renderContent(scrollTarget: scrollTarget)
         if reposition {
-            positionOnActiveScreen()
+            position()
         }
     }
 
     /// Call once after init to pre-warm the WindowServer connection. Subsequent
     /// `present()` calls reuse the connection and are noticeably faster.
+    /// Only the primary panel may call this: it installs an app-wide key
+    /// monitor, and a second one would double every keystroke.
     func preWarm() {
         installKeyMonitor()
         // Force the window backing store to be created up front.
         _ = self.contentView
     }
 
-    func present() {
+    /// Shows the panel on the given screen. Exactly one panel per session may
+    /// pass `makeKeyPanel: true`; mirrors on other displays stay non-key so
+    /// keyboard input has a single owner.
+    func present(on screen: NSScreen?, makeKeyPanel: Bool = true) {
+        assignedScreen = screen
         presentationID += 1
+        sizeToContents()
         renderContent(scrollTarget: snapshot.selectedRow)
-        positionOnActiveScreen()
+        position()
         orderFrontRegardless()
-        makeKey()
+        if makeKeyPanel {
+            makeKey()
+        }
     }
 
     func dismiss() {
@@ -93,7 +124,7 @@ final class SwitcherPanel: NSPanel {
     // MARK: - Layout
 
     private func sizeToContents() {
-        guard let screen = activeScreen() else { return }
+        guard let screen = layoutScreen() else { return }
         let usable = screen.visibleFrame.height - 120
         let rowsHeight = CGFloat(max(1, snapshot.entries.count)) * rowHeight
         let chrome: CGFloat = 12 + (snapshot.searchBuffer.isEmpty ? 0 : 26)
@@ -104,15 +135,13 @@ final class SwitcherPanel: NSPanel {
         setFrame(f, display: false)
     }
 
-    private func positionOnActiveScreen() {
-        guard let screen = activeScreen() else { return }
-        let visible = screen.visibleFrame
-        let x = visible.midX - panelWidth / 2
-        let y = visible.midY - frame.height / 2 + 40 // slight upward bias feels right
-        setFrameOrigin(NSPoint(x: x, y: y))
+    private func position() {
+        guard let screen = layoutScreen() else { return }
+        setFrameOrigin(SwitcherPanelLayout.origin(panelSize: frame.size, visibleFrame: screen.visibleFrame))
     }
 
-    private func activeScreen() -> NSScreen? {
+    private func layoutScreen() -> NSScreen? {
+        if let assignedScreen { return assignedScreen }
         if let mouseScreen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
             return mouseScreen
         }

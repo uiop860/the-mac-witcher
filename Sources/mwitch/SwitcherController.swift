@@ -5,6 +5,11 @@ import Cocoa
 /// advance selection; Cmd-up commits and activates.
 final class SwitcherController {
     private var panel: SwitcherPanel?
+    /// Read-only copies of the switcher shown on every display other than the
+    /// one holding the key panel, so Cmd+Tab is visible wherever you look.
+    /// They never call preWarm() — only the primary panel may own the app-wide
+    /// key monitor.
+    private var mirrorPanels: [SwitcherPanel] = []
     private var session = SwitcherSession()
     private var lastCommitUptime: TimeInterval = -.infinity
 
@@ -64,16 +69,44 @@ final class SwitcherController {
             panel = SwitcherPanel(delegate: self)
             panel?.preWarm()
         }
+        guard let panel else { return }
+
+        let screens = NSScreen.screens
+        let active = Self.activeScreen(in: screens)
+        let others = screens.filter { $0 !== active }
+
+        // One mirror per extra display, created on demand and reused between
+        // opens. The display list can change between sessions, so trim extras.
+        while mirrorPanels.count < others.count {
+            mirrorPanels.append(SwitcherPanel(delegate: self))
+        }
+        if mirrorPanels.count > others.count {
+            for extra in mirrorPanels[others.count...] { extra.dismiss() }
+            mirrorPanels.removeSubrange(others.count...)
+        }
+
         renderPanel(scrollTarget: session.snapshot.selectedRow)
-        panel?.present()
+        for (mirror, screen) in zip(mirrorPanels, others) {
+            mirror.present(on: screen, makeKeyPanel: false)
+        }
+        panel.present(on: active, makeKeyPanel: true)
+    }
+
+    /// The screen the key panel belongs on: under the mouse, else the main one.
+    private static func activeScreen(in screens: [NSScreen]) -> NSScreen? {
+        screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main ?? screens.first
     }
 
     private func hide() {
         panel?.dismiss()
+        for mirror in mirrorPanels { mirror.dismiss() }
     }
 
     private func renderPanel(scrollTarget: Int? = nil, reposition: Bool = false) {
         panel?.render(session.snapshot, scrollTarget: scrollTarget, reposition: reposition)
+        for mirror in mirrorPanels {
+            mirror.render(session.snapshot, scrollTarget: scrollTarget, reposition: reposition)
+        }
     }
 
     private func handle(_ result: SwitcherSessionResult, presenting: Bool = false) {

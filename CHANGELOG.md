@@ -3,6 +3,19 @@
 All notable changes to mwitch are documented here. The same history is published at
 [mwitch.viraat.dev/changelog](https://mwitch.viraat.dev/changelog).
 
+## 1.1.0 — 2026-08-28
+
+- Cmd+Tab lands on the right window again. In apps that use native window
+  tabbing (Ghostty, Terminal), macOS reports the focused *tab* rather than the
+  window on screen, so the window you were actually in could go missing from the
+  top of the list — leaving Cmd+Tab to jump somewhere arbitrary, or to look like
+  it did nothing at all.
+- The switcher now appears on every connected display, not just the one under
+  the cursor — Cmd+Tab is visible wherever you're looking. The panel under the
+  cursor keeps keyboard focus; the others mirror it live.
+- The panel sits in the top half of the screen (Spotlight-style) instead of
+  dead center, clamped so tall lists never poke offscreen.
+
 ## 1.0.1 — 2026-08-11
 
 mwitch is out of alpha. First stable release.
