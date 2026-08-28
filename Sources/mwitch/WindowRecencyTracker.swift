@@ -40,7 +40,7 @@ final class WindowRecencyTracker {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             observeFocusChanges(pid: app.processIdentifier)
         }
-        refreshFrontmostWindow()
+        refreshFrontmostWindow(entries: WindowEnumerator.enumerate())
     }
 
     /// Marks a window as the most recently used.
@@ -92,24 +92,20 @@ final class WindowRecencyTracker {
         guard let refcon else { return }
         let tracker = Unmanaged<WindowRecencyTracker>.fromOpaque(refcon).takeUnretainedValue()
 
-        var pid: pid_t = 0
-        let havePID = AXUIElementGetPid(element, &pid) == .success
-
+        // Recorded as reported. Resolving a tab surface here would need a full
+        // window list on the main run loop for every focus change of every
+        // observed app; the synchronous refresh when the switcher opens does
+        // that resolution once, against the list actually being shown. A stale
+        // surface id further down the order is harmless because `sorted` only
+        // ranks windows that are in the list.
         var winID: CGWindowID = 0
         if _AXUIElementGetWindow(element, &winID) == .success {
-            // Resolve tab surfaces here too: this notification carries the same
-            // focused-tab window that `focusedWindowID` would return.
-            tracker.record(havePID
-                ? WindowRecencyTracker.switchableWindowID(
-                    for: winID,
-                    pid: pid,
-                    onScreenWindowIDs: WindowEnumerator.onScreenWindowIDs(pid:)
-                )
-                : winID)
+            tracker.record(winID)
             return
         }
 
-        guard havePID else { return }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return }
         tracker.recordFocusedWindow(pid: pid, lookup: WindowRecencyTracker.focusedWindowID)
     }
 
@@ -152,58 +148,65 @@ final class WindowRecencyTracker {
 
     func recordFocusedWindow(
         pid: pid_t,
-        onScreenWindowIDs: (pid_t) -> [CGWindowID] = WindowEnumerator.onScreenWindowIDs(pid:),
+        entries: [WindowEntry] = [],
         lookup: (pid_t) -> CGWindowID?
     ) {
         guard pid != ownPID, let id = lookup(pid) else { return }
-        record(Self.switchableWindowID(for: id, pid: pid, onScreenWindowIDs: onScreenWindowIDs))
+        record(Self.switchableWindowID(for: id, pid: pid, entries: entries))
     }
 
-    /// Maps an Accessibility focused-window ID onto the window the switcher
-    /// actually lists.
+    /// Maps an Accessibility focused-window ID onto a window the switcher is
+    /// actually showing, resolved against `entries` — the exact list this
+    /// session is about to display.
     ///
     /// In an app using native window tabbing (Ghostty, Terminal),
     /// `kAXFocusedWindowAttribute` reports the focused *tab's* backing surface
     /// rather than the window on screen. That surface is off-screen and
-    /// unresolvable, so the enumerator drops it as a dead tab surface. Recording
-    /// it anyway seats an ID that never appears in the list at the head of the
-    /// MRU order, which silently breaks the "index zero is the current window"
-    /// guarantee — leaving Cmd+Tab preselecting index one relative to the wrong
-    /// window, so it lands somewhere arbitrary or appears to do nothing.
+    /// AX-unresolvable, so the enumerator drops it as a dead tab surface.
+    /// Recording it anyway seats an id that never appears in the list at the
+    /// head of the MRU order, which silently breaks the "index zero is the
+    /// current window" guarantee — leaving Cmd+Tab preselecting index one
+    /// relative to the wrong window, so it lands somewhere arbitrary or looks
+    /// like it did nothing.
     ///
-    /// Only remap when the focused window is genuinely absent from the app's
-    /// on-screen windows: a hidden or fully minimized app has none, and there
-    /// the recorded focused window is still the right answer.
+    /// Resolving against `entries` rather than against the current Space's
+    /// on-screen windows is what keeps this honest: `enumerate()` deliberately
+    /// keeps real windows parked on other Spaces and in full-screen Spaces, and
+    /// those are legitimately absent from the on-screen list. Treating them as
+    /// tab surfaces would remap a genuine focused window onto a different one —
+    /// the same bug inverted. Only an id the switcher will not show is remapped,
+    /// onto that app's first listed window.
     static func switchableWindowID(
         for focused: CGWindowID,
         pid: pid_t,
-        onScreenWindowIDs: (pid_t) -> [CGWindowID]
+        entries: [WindowEntry]
     ) -> CGWindowID {
-        let onScreen = onScreenWindowIDs(pid)
-        guard !onScreen.isEmpty, !onScreen.contains(focused), let front = onScreen.first else {
-            return focused
-        }
-        return front
+        if entries.contains(where: { $0.cgWindowID == focused }) { return focused }
+        guard let front = entries.first(where: { $0.pid == pid }) else { return focused }
+        return front.cgWindowID
     }
 
     /// Captures the window that is actually focused at the point the switcher
     /// opens. This closes gaps from missed/delayed workspace or AX
     /// notifications and guarantees that index zero is the current window,
     /// making index one the previously used window.
-    func refreshFrontmostWindow() {
+    /// `entries` must be the enumeration about to be displayed, so the focused
+    /// window is resolved against what the switcher will actually show.
+    func refreshFrontmostWindow(entries: [WindowEntry]) {
         refreshFrontmostWindow(
             pid: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            entries: entries,
             lookup: Self.focusedWindowID
         )
     }
 
     func refreshFrontmostWindow(
         pid: pid_t?,
-        onScreenWindowIDs: (pid_t) -> [CGWindowID] = WindowEnumerator.onScreenWindowIDs(pid:),
+        entries: [WindowEntry] = [],
         lookup: (pid_t) -> CGWindowID?
     ) {
         guard let pid else { return }
-        recordFocusedWindow(pid: pid, onScreenWindowIDs: onScreenWindowIDs, lookup: lookup)
+        recordFocusedWindow(pid: pid, entries: entries, lookup: lookup)
     }
 
     /// The CGWindowID of an app's focused window, via the same private API the

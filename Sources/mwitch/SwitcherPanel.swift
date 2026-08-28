@@ -141,7 +141,13 @@ final class SwitcherPanel: NSPanel {
     }
 
     private func layoutScreen() -> NSScreen? {
-        if let assignedScreen { return assignedScreen }
+        // AppKit invalidates NSScreen objects on display reconfiguration. If the
+        // assigned display was unplugged mid-session, a stale object reports a
+        // dead frame — which would size the panel from a bogus height and place
+        // it at coordinates that no longer exist — so fall through and re-resolve.
+        if let assignedScreen, NSScreen.screens.contains(where: { $0 === assignedScreen }) {
+            return assignedScreen
+        }
         if let mouseScreen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
             return mouseScreen
         }

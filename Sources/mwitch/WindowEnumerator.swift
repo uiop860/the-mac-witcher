@@ -193,17 +193,6 @@ enum WindowEnumerator {
         return results
     }
 
-    /// Front-to-back CGWindowIDs of an app's on-screen, normal-layer windows —
-    /// the subset `enumerate()` lists unconditionally. Used to resolve an
-    /// Accessibility focused-window ID onto a window that really appears in the
-    /// switcher.
-    static func onScreenWindowIDs(pid: pid_t) -> [CGWindowID] {
-        rawWindows(options: [.optionOnScreenOnly, .excludeDesktopElements])
-            .filter { $0.pid == pid && $0.layer == 0 }
-            .filter { $0.bounds.height >= 40 && $0.bounds.width >= 80 }
-            .map(\.cgWindowID)
-    }
-
     private static func rawWindows(options: CGWindowListOption) -> [RawWindow] {
         guard let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return []

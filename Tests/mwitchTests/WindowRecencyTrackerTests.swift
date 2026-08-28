@@ -122,76 +122,75 @@ final class WindowRecencyTrackerTests: XCTestCase {
 
     // MARK: - Native tab surfaces (Ghostty, Terminal)
 
-    func testResolvesFocusedTabSurfaceToTheOnScreenWindow() {
+    func testResolvesFocusedTabSurfaceToTheListedWindow() {
         // Ghostty backs each tab with its own off-screen CG window. AX reports
-        // the focused tab surface (132), but the enumerator only ever lists the
-        // on-screen host window (15746). Recording 132 would seat an ID that
-        // never appears in the list at the head of the MRU order.
-        let zOrder = [
+        // the focused tab surface (132), which the enumerator drops, so it is
+        // absent from the list. Recording it would seat an id that never
+        // appears in the list at the head of the MRU order.
+        let listed = [
             entry(id: 15746, app: "Ghostty", title: "Rudder: mwitch"),
             entry(id: 20, app: "Arc", title: "Slack"),
         ]
         let tracker = WindowRecencyTracker(ownPID: 999)
 
-        tracker.refreshFrontmostWindow(
-            pid: 620,
-            onScreenWindowIDs: { $0 == 620 ? [15746] : [] },
-            lookup: { $0 == 620 ? 132 : nil }
-        )
+        tracker.refreshFrontmostWindow(pid: 620, entries: listed, lookup: { $0 == 620 ? 132 : nil })
 
         // Index zero must be the window the user is actually looking at, so
-        // that index one — what Cmd+Tab preselects — is the previous window.
-        XCTAssertEqual(tracker.sorted(zOrder).map(\.cgWindowID), [15746, 20])
+        // index one — what Cmd+Tab preselects — is the previous window.
+        XCTAssertEqual(tracker.sorted(listed).map(\.cgWindowID), [15746, 20])
     }
 
-    func testKeepsFocusedWindowWhenItIsAlreadyOnScreen() {
-        let zOrder = [
+    func testDoesNotRemapAFocusedWindowOnAnotherSpace() {
+        // A real window parked on another Space or in a full-screen Space is
+        // kept by the enumerator and so IS in the list, even though it is not
+        // in the current Space's on-screen windows. It must be recorded as-is:
+        // remapping it onto the app's other window would put index zero on a
+        // window the user is not in — the tab-surface bug inverted.
+        let fullScreen = entry(id: 900, app: "Ghostty", title: "full-screen window")
+        let listed = [
+            entry(id: 44, app: "Ghostty", title: "desktop window"),
+            fullScreen,
+        ]
+        let tracker = WindowRecencyTracker(ownPID: 999)
+
+        tracker.refreshFrontmostWindow(pid: 620, entries: listed, lookup: { $0 == 620 ? 900 : nil })
+
+        XCTAssertEqual(tracker.sorted(listed).map(\.cgWindowID), [900, 44])
+    }
+
+    func testKeepsFocusedWindowWhenItIsListed() {
+        let listed = [
             entry(id: 1, app: "Arc", title: "Project"),
             entry(id: 2, app: "Arc", title: "Docs"),
         ]
         let tracker = WindowRecencyTracker(ownPID: 999)
 
-        tracker.refreshFrontmostWindow(
-            pid: 100,
-            onScreenWindowIDs: { $0 == 100 ? [1, 2] : [] },
-            lookup: { $0 == 100 ? 2 : nil }
-        )
+        tracker.refreshFrontmostWindow(pid: 100, entries: listed, lookup: { $0 == 100 ? 2 : nil })
 
-        XCTAssertEqual(tracker.sorted(zOrder).map(\.cgWindowID), [2, 1])
+        XCTAssertEqual(tracker.sorted(listed).map(\.cgWindowID), [2, 1])
     }
 
-    func testKeepsFocusedWindowWhenTheAppHasNoOnScreenWindows() {
-        // A hidden or fully minimized app has no on-screen window to remap to;
-        // the minimized window the enumerator lists via AX is still correct.
-        let zOrder = [
-            entry(id: 7, app: "Beeper", title: "Beeper"),
-            entry(id: 8, app: "Arc", title: "Slack"),
-        ]
+    func testKeepsFocusedWindowWhenTheAppHasNoListedWindows() {
+        // Nothing to remap onto — keep what AX reported rather than guess.
+        let listed = [entry(id: 8, app: "Arc", title: "Slack")]
         let tracker = WindowRecencyTracker(ownPID: 999)
 
-        tracker.refreshFrontmostWindow(
-            pid: 863,
-            onScreenWindowIDs: { _ in [] },
-            lookup: { $0 == 863 ? 7 : nil }
-        )
+        tracker.refreshFrontmostWindow(pid: 863, entries: listed, lookup: { $0 == 863 ? 7 : nil })
 
-        XCTAssertEqual(tracker.sorted(zOrder).map(\.cgWindowID), [7, 8])
+        XCTAssertEqual(tracker.sorted(listed + [entry(id: 7, app: "Beeper", title: "Beeper")])
+            .map(\.cgWindowID), [7, 8])
     }
 
     func testResolvedTabSurfaceIsNotRecordedForOwnProcess() {
-        let zOrder = [
+        let listed = [
             entry(id: 5, app: "Arc", title: "Slack"),
             entry(id: 6, app: "mwitch", title: "Panel"),
         ]
         let tracker = WindowRecencyTracker(ownPID: 100)
 
-        tracker.refreshFrontmostWindow(
-            pid: 100,
-            onScreenWindowIDs: { _ in [6] },
-            lookup: { _ in 999 }
-        )
+        tracker.refreshFrontmostWindow(pid: 100, entries: listed, lookup: { _ in 999 })
 
-        XCTAssertEqual(tracker.sorted(zOrder).map(\.cgWindowID), [5, 6])
+        XCTAssertEqual(tracker.sorted(listed).map(\.cgWindowID), [5, 6])
     }
 
     private func entry(id: CGWindowID, app: String, title: String) -> WindowEntry {

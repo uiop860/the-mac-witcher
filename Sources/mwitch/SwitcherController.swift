@@ -36,10 +36,14 @@ final class SwitcherController {
             // quick Cmd+Tab toggle into a no-op. The commit already recorded
             // the chosen window, so the cached order is correct — skip the
             // sync refresh until activation has had time to land.
+            // Enumerate first: the focused window is resolved against the list
+            // that is about to be shown, so a native-tab surface can be mapped
+            // onto the window this session will actually display.
+            let enumerated = WindowEnumerator.enumerate()
             if ProcessInfo.processInfo.systemUptime - lastCommitUptime > 1.0 {
-                WindowRecencyTracker.shared.refreshFrontmostWindow()
+                WindowRecencyTracker.shared.refreshFrontmostWindow(entries: enumerated)
             }
-            let entries = WindowRecencyTracker.shared.sorted(WindowEnumerator.enumerate())
+            let entries = WindowRecencyTracker.shared.sorted(enumerated)
             handle(session.start(entries: entries), presenting: true)
         } else {
             handle(session.perform(.moveSelection(delta: reverse ? -1 : 1)))
@@ -93,8 +97,21 @@ final class SwitcherController {
     }
 
     /// The screen the key panel belongs on: under the mouse, else the main one.
+    ///
+    /// `NSScreen.main` is a separate lookup and AppKit does not promise it is
+    /// the same object as the matching element of `screens`. Since `show()`
+    /// partitions the list by identity, an unmatched instance would leave the
+    /// active display in `others` and stack a mirror underneath the key panel,
+    /// so map it back onto the array by display id.
     private static func activeScreen(in screens: [NSScreen]) -> NSScreen? {
-        screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main ?? screens.first
+        if let underMouse = screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
+            return underMouse
+        }
+        if let mainID = NSScreen.main?.displayID,
+           let match = screens.first(where: { $0.displayID == mainID }) {
+            return match
+        }
+        return screens.first
     }
 
     private func hide() {
@@ -135,5 +152,12 @@ extension SwitcherController: SwitcherPanelDelegate {
 
     func switcherPanel(_ panel: SwitcherPanel, didPerform action: SwitcherPanelAction) {
         handle(session.perform(action))
+    }
+}
+
+private extension NSScreen {
+    /// Stable identifier for the physical display behind this `NSScreen`.
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 }
