@@ -156,7 +156,21 @@ enum WindowEnumerator {
             if window.title.isEmpty, axInfo == nil {
                 axInfo = axWindows(for: window.pid)?[window.cgWindowID]
             }
-            let title = window.title.isEmpty ? (axInfo?.title ?? "") : window.title
+            let meta = appMetaForPID(window.pid, window.ownerName)
+            let axTitle = axInfo?.title ?? ""
+            let title: String
+            if !window.title.isEmpty {
+                title = window.title
+            } else if !axTitle.isEmpty {
+                title = axTitle
+            } else if meta.bundleID == "com.apple.systempreferences" {
+                // System Settings publishes an untitled CG window. Its AX title
+                // can also be unavailable (for example during startup), but the
+                // app has a single main window and should remain switchable.
+                title = meta.name
+            } else {
+                title = ""
+            }
             guard !title.isEmpty else { return }
 
             // If a candidate cannot be tied to an AX window, avoid showing the
@@ -171,7 +185,6 @@ enum WindowEnumerator {
                 guard axInfo != nil || spaceMembership == true else { return }
             }
 
-            let meta = appMetaForPID(window.pid, window.ownerName)
             seenWindowIDs.insert(window.cgWindowID)
             seenTitles[window.pid, default: []].insert(title)
             results.append(WindowEntry(

@@ -292,6 +292,30 @@ final class WindowEnumeratorTests: XCTestCase {
         XCTAssertEqual(entries.map(\.title), ["All Contacts"])
     }
 
+    func testUsesAppNameForUntitledSystemSettingsWindowWhenAXTitleIsUnavailable() {
+        let settings = rawWindow(
+            id: 41, pid: 401, owner: "System Settings", title: "", isOnscreen: true
+        )
+
+        let entries = WindowEnumerator.entries(
+            onScreenWindows: [settings],
+            allWindows: [],
+            ownPID: 9999,
+            axWindowsForPID: { _ in nil },
+            appMetaForPID: { _, _ in
+                WindowEnumerator.AppMeta(
+                    name: "System Settings",
+                    icon: nil,
+                    bundleID: "com.apple.systempreferences"
+                )
+            },
+            isAssignedToASpace: { _ in true },
+            isAppHidden: { _ in false }
+        )
+
+        XCTAssertEqual(entries.map(\.title), ["System Settings"])
+    }
+
     func testKeepsDistinctAXWindowsWithTheSameTitle() {
         let first = rawWindow(id: 50, pid: 500, owner: "Chrome", title: "New Tab", isOnscreen: true)
         let second = rawWindow(id: 51, pid: 500, owner: "Chrome", title: "New Tab", isOnscreen: true)
