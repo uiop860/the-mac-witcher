@@ -200,7 +200,7 @@ enum WindowEnumerator {
         return raw.compactMap(RawWindow.init(windowInfo:))
     }
 
-    private static func appMeta(pid: pid_t, ownerName: String) -> AppMeta {
+    static func appMeta(pid: pid_t, ownerName: String) -> AppMeta {
         if let cached = metaCache[pid] { return cached }
         let app = NSRunningApplication(processIdentifier: pid)
         let meta = AppMeta(
@@ -218,7 +218,7 @@ enum WindowEnumerator {
     /// Returns nil when the query itself fails, so callers can tell "app has no
     /// resolvable windows" apart from "AX is unavailable for this app".
     private static func axWindows(pid: pid_t) -> [CGWindowID: AXWindowInfo]? {
-        let axApp = AXUIElementCreateApplication(pid)
+        let axApp = WindowAccessibility.application(pid: pid)
         var windowsValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue) == .success,
               let windows = windowsValue as? [AXUIElement] else {
@@ -227,17 +227,28 @@ enum WindowEnumerator {
 
         var result: [CGWindowID: AXWindowInfo] = [:]
         for window in windows {
+            WindowAccessibility.configure(window)
             var winID: CGWindowID = 0
-            guard _AXUIElementGetWindow(window, &winID) == .success else { continue }
+            let idResult = _AXUIElementGetWindow(window, &winID)
+            if idResult == .cannotComplete { return nil }
+            guard idResult == .success else { continue }
 
             var titleRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
+            if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef) == .cannotComplete {
+                return nil
+            }
             var roleRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &roleRef)
+            if AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &roleRef) == .cannotComplete {
+                return nil
+            }
             var subroleRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleRef)
+            if AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleRef) == .cannotComplete {
+                return nil
+            }
             var minimizedRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedRef)
+            if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedRef) == .cannotComplete {
+                return nil
+            }
 
             result[winID] = AXWindowInfo(
                 title: titleRef as? String ?? "",

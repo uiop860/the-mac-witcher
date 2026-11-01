@@ -5,6 +5,23 @@ import XCTest
 final class SwitcherPanelLayoutTests: XCTestCase {
     private let screen = NSRect(x: 0, y: 0, width: 1728, height: 1080)
 
+    func testSelectionUpdatesDoNotRequestRepeatedResize() {
+        var state = SwitcherPanelSizeState()
+        XCTAssertTrue(state.needsResize(entryCount: 100, visibleFrame: screen))
+        for _ in 0..<100 {
+            XCTAssertFalse(state.needsResize(entryCount: 100, visibleFrame: screen))
+        }
+        XCTAssertTrue(state.needsResize(entryCount: 50, visibleFrame: screen))
+    }
+
+    func testDisplayGeometryChangeInvalidatesSize() {
+        var state = SwitcherPanelSizeState()
+        XCTAssertTrue(state.needsResize(entryCount: 100, visibleFrame: screen))
+        let smaller = NSRect(x: 1728, y: 0, width: 1280, height: 720)
+        XCTAssertTrue(state.needsResize(entryCount: 100, visibleFrame: smaller))
+        XCTAssertFalse(state.needsResize(entryCount: 100, visibleFrame: smaller))
+    }
+
     func testPanelCenterSitsAboveScreenCenter() {
         let size = NSSize(width: 620, height: 400)
         let origin = SwitcherPanelLayout.origin(panelSize: size, visibleFrame: screen)

@@ -18,14 +18,17 @@ final class MwitchLog {
     }
 
     func line(_ msg: String) {
-        let stamp = formatter.string(from: Date())
-        let text = "[\(stamp)] \(msg)\n"
-        queue.async { [url] in
-            guard let data = text.data(using: .utf8) else { return }
+        queue.async { [self] in
+            let stamp = formatter.string(from: Date())
+            guard let data = "[\(stamp)] \(msg)\n".data(using: .utf8) else { return }
             if let handle = try? FileHandle(forWritingTo: url) {
-                handle.seekToEndOfFile()
+                defer { try? handle.close() }
+                // Keep one small diagnostic file rather than growing forever.
+                if handle.seekToEndOfFile() > 1_048_576 {
+                    try? handle.truncate(atOffset: 0)
+                    try? handle.seek(toOffset: 0)
+                }
                 try? handle.write(contentsOf: data)
-                try? handle.close()
             } else {
                 try? data.write(to: url)
             }

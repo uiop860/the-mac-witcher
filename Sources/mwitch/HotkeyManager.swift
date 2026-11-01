@@ -2,7 +2,7 @@ import Cocoa
 import CoreGraphics
 import Carbon.HIToolbox
 
-/// Intercepts Cmd+Tab (and Cmd+Shift+Tab) at the session event-tap level so
+/// Intercepts Cmd+Tab and Cmd+Shift at the session event-tap level so
 /// the system app switcher never sees the keystroke. Also watches Cmd
 /// release to commit the panel's current selection, and Esc to cancel it —
 /// cancelling through the tap (instead of the panel's local key monitor) keeps
@@ -14,6 +14,8 @@ final class HotkeyManager {
     var onPress: (() -> Void)?
     var onShiftPress: (() -> Void)?
     var onModifiersReleased: (() -> Void)?
+    /// Returns true only when the visible switcher handled this command.
+    var onWindowCommand: ((SwitcherWindowCommand) -> Bool)?
     /// Returns `true` when the switcher was visible and is now cancelled, so
     /// the tap knows to swallow the Escape keystroke.
     var onCancel: (() -> Bool)?
@@ -21,10 +23,12 @@ final class HotkeyManager {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var switcherCommitGate = SwitcherCommitGate()
+    private var swallowedCommandKeys: Set<Int64> = []
 
     func register() {
         let mask: CGEventMask =
             (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue) |
             (1 << CGEventType.flagsChanged.rawValue)
 
         let opaqueSelf = Unmanaged.passUnretained(self).toOpaque()
@@ -59,7 +63,7 @@ final class HotkeyManager {
         CGEvent.tapEnable(tap: tap, enable: true)
     }
 
-    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // macOS occasionally disables the tap (timeout, very high event load).
         // Re-enable and let the event through.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -72,16 +76,34 @@ final class HotkeyManager {
         let cmdHeld = flags.contains(.maskCommand)
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
+        if type == .keyUp, swallowedCommandKeys.remove(keyCode) != nil {
+            return nil
+        }
+
         if type == .keyDown {
+            // Swallow repeats so one held key cannot close multiple windows
+            // as the refreshed selection advances.
+            if swallowedCommandKeys.contains(keyCode) { return nil }
+            let plainCommand = cmdHeld && flags.intersection([.maskShift, .maskControl, .maskAlternate]).isEmpty
+            if plainCommand, event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+                let command: SwitcherWindowCommand?
+                switch keyCode {
+                case Int64(kVK_ANSI_W): command = .closeWindow
+                case Int64(kVK_ANSI_Q): command = .quitApplication
+                default: command = nil
+                }
+                if let command, onWindowCommand?(command) == true {
+                    swallowedCommandKeys.insert(keyCode)
+                    switcherCommitGate.arm()
+                    return nil
+                }
+            }
+
             if cmdHeld && keyCode == Int64(kVK_Tab) {
                 // The tap callback runs on the main runloop, so we can call
                 // straight through without a dispatch_async hop. Trims the
                 // perceptible Cmd+Tab→panel latency.
-                if flags.contains(.maskShift) {
-                    onShiftPress?()
-                } else {
-                    onPress?()
-                }
+                onPress?()
                 switcherCommitGate.arm()
                 return nil // swallow before WindowServer sees it
             }
@@ -101,6 +123,13 @@ final class HotkeyManager {
 
         let changedCommandKey = keyCode == Int64(kVK_Command) || keyCode == Int64(kVK_RightCommand)
         if type == .flagsChanged {
+            let changedShiftKey = keyCode == Int64(kVK_Shift) || keyCode == Int64(kVK_RightShift)
+            if cmdHeld && changedShiftKey && flags.contains(.maskShift) {
+                onShiftPress?()
+                switcherCommitGate.arm()
+                return nil
+            }
+
             switch switcherCommitGate.resolvePendingCommit(
                 commandStillHeld: cmdHeld,
                 changedKeyIsCommand: changedCommandKey
@@ -125,12 +154,12 @@ final class HotkeyManager {
     }
 }
 
-/// Tracks whether mwitch has intercepted Cmd+Tab/Cmd+Shift+Tab and should
+/// Tracks whether mwitch has intercepted Cmd+Tab/Cmd+Shift and should
 /// commit the switcher when the matching Command-key release arrives.
 struct SwitcherCommitGate {
     private var waitingForCommandRelease = false
 
-    /// Called after the event tap swallows Cmd+Tab or Cmd+Shift+Tab.
+    /// Called after the event tap swallows Cmd+Tab or Cmd+Shift.
     mutating func arm() {
         waitingForCommandRelease = true
     }

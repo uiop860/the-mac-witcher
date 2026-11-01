@@ -19,9 +19,22 @@ enum SwitcherPanelLayout {
     }
 }
 
+/// Selection changes keep these inputs unchanged; display changes invalidate them.
+struct SwitcherPanelSizeState {
+    private var entryCount: Int?
+    private var visibleFrame: NSRect?
+
+    mutating func needsResize(entryCount: Int, visibleFrame: NSRect) -> Bool {
+        guard self.entryCount != entryCount || self.visibleFrame != visibleFrame else { return false }
+        self.entryCount = entryCount
+        self.visibleFrame = visibleFrame
+        return true
+    }
+}
+
 /// Floating panel with the row layout:
-///     [hint] [app name, right-aligned] [icon] [window title, left-aligned]
-/// Typing filters by app + title; release Cmd commits.
+///     [app icon] [window title]
+/// Release Cmd commits the current selection.
 final class SwitcherPanel: NSPanel {
     private weak var panelDelegate: SwitcherPanelDelegate?
 
@@ -31,17 +44,17 @@ final class SwitcherPanel: NSPanel {
 
     private var hostingView: NSHostingView<SwitcherPanelView>?
     private var snapshot = SwitcherPanelSnapshot.empty
+    private var sizeState = SwitcherPanelSizeState()
 
     private var keyMonitor: Any?
-    // Forces SwiftUI hover state to reset each time the reused panel is shown.
-    private var presentationID = 0
+    private var scrollRequestID = 0
 
-    private let rowHeight: CGFloat = 38
-    private let panelWidth: CGFloat = 620
-    private let cornerRadius: CGFloat = 10
-    private let selectionInsetX: CGFloat = 7
-    private let selectionInsetY: CGFloat = 3
-    private let selectionCornerRadius: CGFloat = 8
+    private let rowHeight: CGFloat = 48
+    private let panelWidth: CGFloat = 640
+    private let cornerRadius: CGFloat = 12
+    private let selectionInsetX: CGFloat = 8
+    private let selectionInsetY: CGFloat = 4
+    private let selectionCornerRadius: CGFloat = 10
 
     init(delegate: SwitcherPanelDelegate) {
         self.panelDelegate = delegate
@@ -65,6 +78,10 @@ final class SwitcherPanel: NSPanel {
         setupContent()
     }
 
+    deinit {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -83,13 +100,16 @@ final class SwitcherPanel: NSPanel {
 
     // MARK: - Lifecycle
 
-    func render(_ snapshot: SwitcherPanelSnapshot, scrollTarget: Int? = nil, reposition: Bool = false) {
+    func render(_ snapshot: SwitcherPanelSnapshot, scrollTarget: Int? = nil) {
         self.snapshot = snapshot
         sizeToContents()
         renderContent(scrollTarget: scrollTarget)
-        if reposition {
-            position()
-        }
+    }
+
+    func renderSelection(_ selectedRow: Int?, scrollTarget: Int? = nil) {
+        var next = snapshot
+        next.selectedRow = selectedRow
+        render(next, scrollTarget: scrollTarget)
     }
 
     /// Call once after init to pre-warm the WindowServer connection. Subsequent
@@ -105,11 +125,9 @@ final class SwitcherPanel: NSPanel {
     /// Shows the panel on the given screen. Exactly one panel per session may
     /// pass `makeKeyPanel: true`; mirrors on other displays stay non-key so
     /// keyboard input has a single owner.
-    func present(on screen: NSScreen?, makeKeyPanel: Bool = true) {
+    func present(_ snapshot: SwitcherPanelSnapshot, on screen: NSScreen?, makeKeyPanel: Bool = true) {
         assignedScreen = screen
-        presentationID += 1
-        sizeToContents()
-        renderContent(scrollTarget: snapshot.selectedRow)
+        render(snapshot, scrollTarget: snapshot.selectedRow)
         position()
         orderFrontRegardless()
         if makeKeyPanel {
@@ -124,15 +142,20 @@ final class SwitcherPanel: NSPanel {
     // MARK: - Layout
 
     private func sizeToContents() {
-        guard let screen = layoutScreen() else { return }
+        guard let screen = layoutScreen(),
+              sizeState.needsResize(entryCount: snapshot.entries.count, visibleFrame: screen.visibleFrame)
+        else { return }
         let usable = screen.visibleFrame.height - 120
         let rowsHeight = CGFloat(max(1, snapshot.entries.count)) * rowHeight
-        let chrome: CGFloat = 12 + (snapshot.searchBuffer.isEmpty ? 0 : 26)
+        let chrome: CGFloat = 16
         let desired = rowsHeight + chrome
         let height = min(usable, max(rowHeight + chrome, desired))
-        var f = frame
-        f.size = NSSize(width: panelWidth, height: height)
-        setFrame(f, display: false)
+        let size = NSSize(width: panelWidth, height: height)
+        if frame.size != size {
+            var f = frame
+            f.size = size
+            setFrame(f, display: false)
+        }
     }
 
     private func position() {
@@ -185,42 +208,29 @@ final class SwitcherPanel: NSPanel {
                 didPerform: .moveSelection(delta: event.modifierFlags.contains(.shift) ? -1 : 1)
             )
             return true
-        case 51: // Delete
-            panelDelegate?.switcherPanel(self, didPerform: .deleteLastSearchCharacter)
-            return true
         default:
-            if let chars = event.charactersIgnoringModifiers,
-               let scalar = chars.unicodeScalars.first,
-               scalar.value >= 0x20, scalar.value < 0x7F {
-                panelDelegate?.switcherPanel(self, didPerform: .appendSearchCharacter(Character(scalar)))
-                return true
-            }
             return false
         }
     }
 
     private func renderContent(scrollTarget: Int? = nil) {
+        if scrollTarget != nil { scrollRequestID += 1 }
         hostingView?.rootView = makePanelView(scrollTarget: scrollTarget)
     }
 
     private func makePanelView(scrollTarget: Int? = nil) -> SwitcherPanelView {
         SwitcherPanelView(
             entries: snapshot.entries,
-            searchBuffer: snapshot.searchBuffer,
             selectedRow: snapshot.selectedRow,
             scrollTarget: scrollTarget,
-            presentationID: presentationID,
+            scrollRequestID: scrollRequestID,
             rowHeight: rowHeight,
             selectionInsetX: selectionInsetX,
             selectionInsetY: selectionInsetY,
             selectionCornerRadius: selectionCornerRadius,
-            onSelect: { [weak self] row in
-                guard let self else { return }
-                self.panelDelegate?.switcherPanel(self, didPerform: .selectFilteredRow(row))
-            },
             onCommit: { [weak self] row in
                 guard let self else { return }
-                self.panelDelegate?.switcherPanel(self, didPerform: .commitFilteredRow(row))
+                self.panelDelegate?.switcherPanel(self, didPerform: .commitRow(row))
             }
         )
     }

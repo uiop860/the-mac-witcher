@@ -10,7 +10,6 @@ DerivedData/
 __pycache__/
 *.pyc
 RUDDER.md
-mwitch-site/mwitch.zip
 .gstack/
 .rudder/
 .rudder-worktrees/

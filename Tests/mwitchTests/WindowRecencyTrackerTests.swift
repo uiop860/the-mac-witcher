@@ -2,6 +2,17 @@ import XCTest
 @testable import mwitch
 
 final class WindowRecencyTrackerTests: XCTestCase {
+    func testTerminatedProcessMetadataIsEvictedBeforePIDReuse() {
+        let pid: pid_t = -42
+        defer { WindowEnumerator.invalidate(pid: pid) }
+        XCTAssertEqual(WindowEnumerator.appMeta(pid: pid, ownerName: "Old app").name, "Old app")
+        XCTAssertEqual(WindowEnumerator.appMeta(pid: pid, ownerName: "New app").name, "Old app")
+
+        WindowRecencyTracker().stopTracking(pid: pid)
+
+        XCTAssertEqual(WindowEnumerator.appMeta(pid: pid, ownerName: "New app").name, "New app")
+    }
+
     func testSortsMostRecentlyUsedFirstAndUngroupsApps() {
         // z-order groups an app's windows together: [a1, a2, b1].
         let zOrder = [

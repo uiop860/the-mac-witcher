@@ -11,19 +11,10 @@ APP="$BUILD_DIR/mwitch.app"
 echo "==> Building (arm64, $CONFIG)"
 swift build -c "$CONFIG" --arch arm64
 
-BIN_DIR=".build/arm64-apple-macosx/$CONFIG"
+BIN_DIR="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)"
 BIN="$BIN_DIR/mwitch"
 if [[ ! -x "$BIN" ]]; then
     echo "error: build output not found at $BIN" >&2
-    exit 1
-fi
-
-# SPM copies the resolved Sparkle.framework next to the binary. It's a
-# universal (arm64+x86_64) slice with the helper apps + XPC services inside.
-SPARKLE_FW="$BIN_DIR/Sparkle.framework"
-if [[ ! -d "$SPARKLE_FW" ]]; then
-    echo "error: Sparkle.framework not found at $SPARKLE_FW" >&2
-    echo "       Run 'swift package resolve' then rebuild." >&2
     exit 1
 fi
 
@@ -34,25 +25,19 @@ fi
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/mwitch"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 chmod +x "$APP/Contents/MacOS/mwitch"
 
-# Stamp the version. Marketing version comes from MWITCH_VERSION (set from the
-# git tag in CI) or the VERSION file locally; the build number is the git commit
-# count so it increases monotonically — Sparkle uses CFBundleVersion to decide
-# whether an appcast item is newer than what's installed.
+# Stamp the version from MWITCH_VERSION or VERSION, and the build number
+# from the git commit count.
 MARKETING_VERSION="${MWITCH_VERSION:-$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo 0.0.0)}"
 BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 echo "==> Version $MARKETING_VERSION (build $BUILD_NUMBER)"
 plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP/Contents/Info.plist"
-
-# Embed Sparkle (cp -R preserves the framework's internal symlinks).
-echo "==> Embedding Sparkle.framework"
-cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/Sparkle.framework"
 
 # Prefer a stable signing identity over ad-hoc so TCC grants (Accessibility,
 # etc.) persist across rebuilds. Developer ID Application is best (also
@@ -67,30 +52,8 @@ if [[ -z "$SIGN_ID" ]]; then
     IS_DEVELOPER_ID=0
 fi
 
-# Sparkle's framework, helper apps, and XPC services must each be signed
-# inside-out with our identity *before* the outer app. Under hardened runtime,
-# library validation only loads code signed by the same Team ID, so the
-# framework (shipped signed by the Sparkle project) has to be re-signed.
-sign_sparkle() {
-    local id="$1"
-    local fw="$APP/Contents/Frameworks/Sparkle.framework"
-    local v="$fw/Versions/B"
-    local opts=(--force --options runtime)
-    [[ "$id" != "-" ]] && opts+=(--timestamp)
-    for target in \
-        "$v/XPCServices/Downloader.xpc" \
-        "$v/XPCServices/Installer.xpc" \
-        "$v/Autoupdate" \
-        "$v/Updater.app" \
-        "$fw"; do
-        [[ -e "$target" ]] || continue
-        codesign "${opts[@]}" --sign "$id" "$target"
-    done
-}
-
 if [[ -n "$SIGN_ID" && "$IS_DEVELOPER_ID" -eq 1 ]]; then
     echo "==> Signing with: $SIGN_ID"
-    sign_sparkle "$SIGN_ID"
     codesign --force \
         --options runtime \
         --timestamp \
@@ -101,7 +64,6 @@ if [[ -n "$SIGN_ID" && "$IS_DEVELOPER_ID" -eq 1 ]]; then
     echo "==> Signed with Developer ID (ready for notarization)"
 elif [[ -n "$SIGN_ID" ]]; then
     echo "==> Signing with: $SIGN_ID (local-use cert; not notarizable)"
-    sign_sparkle "$SIGN_ID"
     codesign --force \
         --options runtime \
         --entitlements "$ROOT/Resources/mwitch.entitlements" \
@@ -113,16 +75,36 @@ else
     echo "==> No signing cert found — falling back to ad-hoc signing"
     echo "    (TCC permissions will not persist across rebuilds.)"
     echo "    Create one in Xcode: Settings → Accounts → Manage Certificates → + → Developer ID Application"
-    sign_sparkle "-"
-    codesign --force --sign - --options runtime "$APP" >/dev/null 2>&1 \
-        || codesign --force --sign - "$APP"
+    codesign --force --sign - "$APP"
+    codesign --verify --strict --deep --verbose=2 "$APP"
 fi
 
 echo ""
 echo "Built: $APP"
-echo "Run:   open '$APP'"
-echo "       (or '$APP/Contents/MacOS/mwitch' to see stdout)"
-echo ""
-if [[ "$IS_DEVELOPER_ID" -eq 1 ]]; then
-    echo "Next:  ./notarize.sh   # submits to Apple and staples the ticket"
+
+# Install local builds at a stable path so privacy permissions survive rebuilds.
+# Release automation only needs the bundle under build/.
+RUN_APP="$APP"
+if [[ "${MWITCH_INSTALL:-1}" == "1" && "${CI:-false}" != "true" ]]; then
+    INSTALL_APP="/Applications/mwitch.app"
+    INSTALL_STAGE="$(mktemp -d /Applications/.mwitch-install.XXXXXX)"
+    trap 'rm -rf "$INSTALL_STAGE"' EXIT
+    ditto "$APP" "$INSTALL_STAGE/mwitch.app"
+    echo "==> Stopping any running mwitch instance"
+    if pgrep -x mwitch >/dev/null; then
+        osascript -e 'tell application "mwitch" to quit'
+    fi
+    echo "==> Installing $INSTALL_APP"
+    # Replace the bundle so removed frameworks and helpers cannot linger.
+    rm -rf "$INSTALL_APP"
+    mv "$INSTALL_STAGE/mwitch.app" "$INSTALL_APP"
+    rmdir "$INSTALL_STAGE"
+    trap - EXIT
+    RUN_APP="$INSTALL_APP"
+    echo "==> Starting $INSTALL_APP"
+    open "$INSTALL_APP"
 fi
+
+echo "Run:   open '$RUN_APP'"
+echo "       (or '$RUN_APP/Contents/MacOS/mwitch' to see stdout)"
+echo ""

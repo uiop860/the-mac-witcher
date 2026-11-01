@@ -140,7 +140,7 @@ let sizes: [(name: String, px: Int)] = [
     ("icon_512x512@2x.png", 1024)
 ]
 
-let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset"
+let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "build/AppIcon.iconset"
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
 for (name, px) in sizes {
@@ -157,16 +157,4 @@ for (name, px) in sizes {
     CGImageDestinationAddImage(dest, img, nil)
     CGImageDestinationFinalize(dest)
     print("wrote \(name) (\(px)x\(px))")
-}
-
-// Also emit a standalone 1024 png for READMEs etc.
-if let img = render(size: 1024) {
-    let url = URL(fileURLWithPath: outDir).deletingLastPathComponent().appendingPathComponent("mwitch-logo.png")
-    if let dest = CGImageDestinationCreateWithURL(
-        url as CFURL, UTType.png.identifier as CFString, 1, nil
-    ) {
-        CGImageDestinationAddImage(dest, img, nil)
-        CGImageDestinationFinalize(dest)
-        print("wrote \(url.lastPathComponent)")
-    }
 }

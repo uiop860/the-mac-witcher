@@ -3,15 +3,12 @@ import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
 import ServiceManagement
-import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     var switcher: SwitcherController!
     private var hotkey: HotkeyManager!
     private var launchAtLoginMenuItem: NSMenuItem?
-    private var updater: SPUUpdater!
-    private var updateUserDriver: MwitchUpdateUserDriver!
 
     private static let launchAtLoginFirstRunKey = "mwitch.launchAtLogin.firstRunHandled"
 
@@ -27,10 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MwitchLog.shared.line("CGPreflightScreenCaptureAccess=\(scOK)")
         if !scOK { _ = CGRequestScreenCaptureAccess() }
         enableLaunchAtLoginIfFirstRun()
-        // Sparkle: silent background auto-update (SUAutomaticallyUpdate in
-        // Info.plist). Created before the status menu so "Check for Updates…"
-        // can target it. startUpdater() kicks off the scheduled checks.
-        setupUpdater()
         setupStatusItem()
 
         WindowRecencyTracker.shared.start()
@@ -40,20 +33,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkey = HotkeyManager()
         hotkey.onPress = { [weak self] in
-            MwitchLog.shared.line("hotkey: Cmd+Tab")
             self?.switcher.advance()
         }
         hotkey.onShiftPress = { [weak self] in
-            MwitchLog.shared.line("hotkey: Cmd+Shift+Tab")
             self?.switcher.advance(reverse: true)
         }
+        hotkey.onWindowCommand = { [weak self] command in
+            self?.switcher.performWindowCommand(command) ?? false
+        }
         hotkey.onModifiersReleased = { [weak self] in
-            MwitchLog.shared.line("hotkey: Cmd released → commit")
             self?.switcher.commitIfVisible()
         }
         hotkey.onCancel = { [weak self] in
             guard let self, self.switcher.isVisible else { return false }
-            MwitchLog.shared.line("hotkey: Esc → cancel")
             self.switcher.cancel()
             return true
         }
@@ -74,12 +66,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             btn.image?.isTemplate = true
         }
         let menu = NSMenu()
-        let updateItem = NSMenuItem(title: "Check for Updates…",
-                                    action: #selector(checkForUpdates),
-                                    keyEquivalent: "")
-        updateItem.target = self
-        menu.addItem(updateItem)
-        menu.addItem(NSMenuItem.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
@@ -88,34 +74,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Quit mwitch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
-    }
-
-    private func setupUpdater() {
-        updateUserDriver = MwitchUpdateUserDriver(hostBundle: .main) {
-            Self.currentVersionDescription
-        }
-        updater = SPUUpdater(hostBundle: .main,
-                             applicationBundle: .main,
-                             userDriver: updateUserDriver,
-                             delegate: nil)
-        do {
-            try updater.start()
-        } catch {
-            MwitchLog.shared.line("updater: failed to start: \(error)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                let alert = NSAlert()
-                alert.alertStyle = .warning
-                alert.messageText = "Unable to Check for Updates"
-                alert.informativeText = "The updater failed to start. Please install the latest version of mwitch from mwitch.viraat.dev."
-                alert.runModal()
-            }
-        }
-    }
-
-    private static var currentVersionDescription: String {
-        let info = Bundle.main.infoDictionary
-        return (info?["CFBundleShortVersionString"] as? String)
-            .flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
     }
 
     private func enableLaunchAtLoginIfFirstRun() {
@@ -147,36 +105,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func checkForUpdates() {
-        updater.checkForUpdates()
-    }
-}
-
-extension AppDelegate: NSMenuItemValidation {
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(checkForUpdates) {
-            return updater?.canCheckForUpdates ?? false
-        }
-        return true
-    }
-}
-
-private final class MwitchUpdateUserDriver: SPUStandardUserDriver {
-    private let versionProvider: () -> String
-
-    init(hostBundle: Bundle, versionProvider: @escaping () -> String) {
-        self.versionProvider = versionProvider
-        super.init(hostBundle: hostBundle, delegate: nil)
-    }
-
-    override func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        let nsError = error as NSError
-        let userInfo = nsError.userInfo.merging([
-            NSLocalizedDescriptionKey: "No New Updates",
-            NSLocalizedRecoverySuggestionErrorKey: "mwitch is up to date.\nCurrent version: \(versionProvider())",
-            NSLocalizedRecoveryOptionsErrorKey: ["OK"]
-        ]) { _, new in new }
-        let presentationError = NSError(domain: nsError.domain, code: nsError.code, userInfo: userInfo)
-        super.showUpdateNotFoundWithError(presentationError, acknowledgement: acknowledgement)
-    }
 }

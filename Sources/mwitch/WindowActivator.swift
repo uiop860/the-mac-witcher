@@ -32,7 +32,7 @@ enum WindowActivator {
         guard let app = NSRunningApplication(processIdentifier: entry.pid) else { return }
         app.unhide()
 
-        let axApp = AXUIElementCreateApplication(entry.pid)
+        let axApp = WindowAccessibility.application(pid: entry.pid)
 
         if let target = resolveTarget(axApp, entry: entry) {
             raiseAndFocus(target, axApp: axApp)
@@ -61,14 +61,19 @@ enum WindowActivator {
         }
 
         for window in windows {
+            WindowAccessibility.configure(window)
             var winID: CGWindowID = 0
-            if _AXUIElementGetWindow(window, &winID) == .success, winID == entry.cgWindowID {
+            let result = _AXUIElementGetWindow(window, &winID)
+            if result == .cannotComplete { return nil }
+            if result == .success, winID == entry.cgWindowID {
                 return window
             }
         }
         for window in windows {
             var titleRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
+            if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef) == .cannotComplete {
+                return nil
+            }
             if let t = titleRef as? String, t == entry.title {
                 return window
             }
@@ -90,12 +95,14 @@ enum WindowActivator {
     private static func raiseAndFocus(_ target: AXUIElement, axApp: AXUIElement) {
         // Un-minimize if needed.
         var minRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(target, kAXMinimizedAttribute as CFString, &minRef)
+        guard AXUIElementCopyAttributeValue(target, kAXMinimizedAttribute as CFString, &minRef) != .cannotComplete else {
+            return
+        }
         if let minimized = minRef as? Bool, minimized {
             AXUIElementSetAttributeValue(target, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
 
-        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        guard AXUIElementPerformAction(target, kAXRaiseAction as CFString) != .cannotComplete else { return }
 
         var settable: DarwinBoolean = false
         if AXUIElementIsAttributeSettable(target, kAXMainAttribute as CFString, &settable) == .success,

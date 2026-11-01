@@ -79,7 +79,13 @@ final class WindowRecencyTracker {
 
     @objc private func appTerminated(_ note: Notification) {
         guard let pid = Self.pid(from: note) else { return }
+        stopTracking(pid: pid)
+    }
+
+    /// Release both observer and icon metadata when a process exits.
+    func stopTracking(pid: pid_t) {
         stopObserving(pid: pid)
+        WindowEnumerator.invalidate(pid: pid)
     }
 
     // MARK: - Per-app focused-window observers
@@ -115,7 +121,7 @@ final class WindowRecencyTracker {
         guard AXObserverCreate(pid, focusChangedCallback, &observer) == .success,
               let observer else { return }
 
-        let axApp = AXUIElementCreateApplication(pid)
+        let axApp = WindowAccessibility.application(pid: pid)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         let focusedResult = AXObserverAddNotification(
             observer,
@@ -212,12 +218,7 @@ final class WindowRecencyTracker {
     /// The CGWindowID of an app's focused window, via the same private API the
     /// enumerator and activator use to bridge AX windows to CGWindowIDs.
     private static func focusedWindowID(pid: pid_t) -> CGWindowID? {
-        let axApp = AXUIElementCreateApplication(pid)
-        // This runs synchronously on the hotkey path against the frontmost app.
-        // The default AX messaging timeout is ~6s, so a hung frontmost app —
-        // exactly what the user is trying to escape — would freeze the switcher
-        // for that long. Cap the wait; on timeout the cached recency stands.
-        AXUIElementSetMessagingTimeout(axApp, 0.25)
+        let axApp = WindowAccessibility.application(pid: pid)
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focused) == .success,
               let focusedRef = focused,
