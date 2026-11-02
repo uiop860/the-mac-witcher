@@ -125,9 +125,18 @@ private final class WindowRow: NSTableRowView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        NSColor.controlAccentColor.setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: insetX, dy: insetY),
-                     xRadius: radius, yRadius: radius).fill()
+        let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        // Deepen the accent in light mode so the selection and its white title
+        // stay distinct even when the material sits over a bright window.
+        let accent = NSColor.controlAccentColor
+        let fill = isDark ? accent : (accent.blended(withFraction: 0.10, of: .black) ?? accent)
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: insetX, dy: insetY),
+                                xRadius: radius, yRadius: radius)
+        fill.setFill()
+        path.fill()
+        (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.10).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 }
 
