@@ -51,10 +51,10 @@ final class SwitcherPanel: NSPanel {
 
     private let rowHeight: CGFloat = 48
     private let panelWidth: CGFloat = 640
-    private let cornerRadius: CGFloat = 12
+    private let cornerRadius: CGFloat = SwitcherPanelView.cornerRadius
     private let selectionInsetX: CGFloat = 8
     private let selectionInsetY: CGFloat = 4
-    private let selectionCornerRadius: CGFloat = 10
+    private let selectionCornerRadius: CGFloat = 12
 
     init(delegate: SwitcherPanelDelegate) {
         self.panelDelegate = delegate

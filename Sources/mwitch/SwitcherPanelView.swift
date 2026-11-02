@@ -12,6 +12,10 @@ struct SwitcherPanelView: View {
     let selectionCornerRadius: CGFloat
     let onCommit: (Int) -> Void
 
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    static let cornerRadius: CGFloat = 20
+
     var body: some View {
         SwitcherWindowList(
             entries: entries, selectedRow: selectedRow, scrollTarget: scrollTarget,
@@ -21,12 +25,24 @@ struct SwitcherPanelView: View {
             onCommit: onCommit
         )
         .padding(8)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
-        )
+        .background {
+            panelBackground
+        }
+    }
+
+    @ViewBuilder
+    private var panelBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+        if reduceTransparency {
+            shape.fill(Color(nsColor: .windowBackgroundColor))
+        } else if #available(macOS 26.0, *) {
+            Color.clear.glassEffect(.regular, in: shape)
+        } else {
+            shape.fill(.regularMaterial)
+                .overlay {
+                    shape.strokeBorder(Color(nsColor: .separatorColor).opacity(0.25), lineWidth: 1)
+                }
+        }
     }
 }
 

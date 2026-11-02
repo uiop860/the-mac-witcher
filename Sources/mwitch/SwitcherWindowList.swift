@@ -125,9 +125,17 @@ private final class WindowRow: NSTableRowView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        NSColor.controlAccentColor.setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: insetX, dy: insetY),
-                     xRadius: radius, yRadius: radius).fill()
+        let strongSelection = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ||
+            NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: insetX, dy: insetY),
+                                xRadius: radius, yRadius: radius)
+        NSColor.controlAccentColor.withAlphaComponent(strongSelection ? 1 : 0.20).setFill()
+        path.fill()
+        if !strongSelection {
+            NSColor.controlAccentColor.withAlphaComponent(0.30).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
     }
 }
 
@@ -171,7 +179,9 @@ private final class WindowCell: NSTableCellView {
             in: NSRect(x: 60, y: textY, width: max(0, bounds.width - 80), height: 21),
             withAttributes: [
                 .font: Self.font, .paragraphStyle: Self.titleStyle,
-                .foregroundColor: selected ? NSColor.white : NSColor.labelColor
+                .foregroundColor: selected && (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ||
+                    NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
+                    ? NSColor.white : NSColor.labelColor
             ]
         )
     }
